@@ -41,6 +41,7 @@ PROXY_TECH_DESCRIPTION = "IPv4 Socks5"
 CHANNEL_USERNAME = "@glino_premka"
 CHANNEL_INVITE_LINK = "https://t.me/glino_premka"
 SUPPORT_URL = "https://t.me/glino_premka_helper"
+STARS_GIFT_USERNAME = "glinomeas"
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("shop")
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
