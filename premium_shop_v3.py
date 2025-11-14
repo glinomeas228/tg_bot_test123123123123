@@ -15,10 +15,11 @@ from aiogram.enums import ParseMode, ContentType
 from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, PreCheckoutQuery, InputFile
 from aiogram.filters import Command
 
-BOT_TOKEN = "8205190372:AAHF3y--mPK9r5u6sGxky6M7aRL_F9P2K9U"
+BOT_TOKEN = "8205190372:AAH9UcrhAgr--y245eR4AzLYhh74i3rzjy8"
 MAIN_ADMIN_ID = 7418079991
 DB_PATH = "bot_users.db"
-BANNER_FILE = "banner.png"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BANNER_FILE = os.path.join(BASE_DIR, "banner.png")
 PRIVACY_URL = "https://teletype.in/@glinomeas/politika"
 YOOMONEY_ACCESS_TOKEN = "923830691E6C9FDB57B4DDAA4EE0FA6D1410B9540055D79DB4DB0503B8D9EE20"
 YOOMONEY_RECEIVER = "4100118173380375"
@@ -29,7 +30,8 @@ POLL_INTERVAL = 25
 DEFAULT_EXCHANGE_RATE = 85.0
 EXCHANGE_API_URL = "https://api.exchangerate.host/latest?base=USD&symbols=RUB"
 STARS_PER_USD = 70
-MIN_TOPUP_RUB = 50.0
+REFERRAL_BONUS_RUB = 5.0
+MIN_TOPUP_RUB = 100.0
 BASE_USD_PER_MONTH = 3.0
 BASE_USD_YEAR = 25.0
 DEFAULT_MAX_STARS = 1000000
@@ -299,7 +301,19 @@ async def mark_referral_rewarded(invited_id: int):
             await DB_CONN.execute("UPDATE profiles SET referrals_count = referrals_count + 1 WHERE user_id = ?", (row[0],))
         await DB_CONN.commit()
 
-async def award_referral_if_needed(invited_id: int, amount: float = 5.0) -> bool:
+async def get_referral_stats(user_id: int) -> Tuple[int, float]:
+    prof = await get_profile(user_id)
+    refs_done = prof["referrals_count"]
+    invited_bonus_count = 0
+    async with DB_LOCK:
+        cur = await DB_CONN.execute("SELECT rewarded FROM referrals WHERE invited_id = ? LIMIT 1", (user_id,))
+        row = await cur.fetchone()
+    if row and int(row[0] or 0) == 1:
+        invited_bonus_count = 1
+    total_earned = (refs_done + invited_bonus_count) * REFERRAL_BONUS_RUB
+    return refs_done, float(total_earned)
+
+async def award_referral_if_needed(invited_id: int, amount: float = REFERRAL_BONUS_RUB) -> bool:
     try:
         prof = await get_profile(invited_id)
         ref = prof["referrer_id"]
@@ -307,12 +321,21 @@ async def award_referral_if_needed(invited_id: int, amount: float = 5.0) -> bool
             return False
         await add_real_balance(invited_id, amount)
         await add_real_balance(ref, amount)
+        await mark_referral_rewarded(invited_id)
         try:
-            await bot.send_message(invited_id, f"🎉 Вам начислено <b>{amount:.0f}₽</b> за подписку по реферальной ссылке.")
+            await bot.send_message(
+                invited_id,
+                f"🎉 <b>Реферальный бонус!</b>\n\n"
+                f"Вам начислено <b>{amount:.0f}₽</b> за подписку по реферальной ссылке. Спасибо, что с нами! 🌟",
+            )
         except:
             pass
         try:
-            await bot.send_message(ref, f"🔔 У вас новый реферал. Начислено <b>{amount:.0f}₽</b> на баланс.")
+            await bot.send_message(
+                ref,
+                f"🫂 <b>Новый реферал!</b>\n\n"
+                f"Вашему балансу добавлено <b>{amount:.0f}₽</b> за приглашённого друга. Продолжайте приглашать! 💸",
+            )
         except:
             pass
         return True
@@ -524,6 +547,7 @@ BTN_PROFILE = "👤 Профиль"
 BTN_PROMO = "🎫 Промокод"
 BTN_SUPPORT = "🆘 Поддержка"
 BTN_PRIVACY = "🔒 Политика конфиденциальности"
+BTN_REF_SYSTEM = "🫂 Реферальная система"
 BTN_BACK = "🔙 Назад"
 BTN_PREMIUM = "💎 Telegram Premium"
 BTN_STARS = "⭐ Купить Звёзды"
@@ -536,7 +560,18 @@ BTN_PAY_STARS = "⭐ Оплатить Звёздами"
 BTN_CHECK = "🔎 Проверить Оплату"
 
 def rk_main() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text=BTN_TELEGRAM), KeyboardButton(text=BTN_PROXY)],[KeyboardButton(text=BTN_FREE)],[KeyboardButton(text=BTN_PROFILE), KeyboardButton(text=BTN_PROMO)],[KeyboardButton(text=BTN_SUPPORT)],[KeyboardButton(text=BTN_PRIVACY)]], resize_keyboard=True, one_time_keyboard=False, input_field_placeholder="Выберите действие…")
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text=BTN_TELEGRAM), KeyboardButton(text=BTN_PROXY)],
+            [KeyboardButton(text=BTN_FREE)],
+            [KeyboardButton(text=BTN_PROFILE), KeyboardButton(text=BTN_PROMO)],
+            [KeyboardButton(text=BTN_SUPPORT), KeyboardButton(text=BTN_PRIVACY)],
+            [KeyboardButton(text=BTN_REF_SYSTEM)],
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=False,
+        input_field_placeholder="Выберите действие…",
+    )
 
 def rk_telegram() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text=BTN_PREMIUM)],[KeyboardButton(text=BTN_STARS)],[KeyboardButton(text=BTN_EMPTY)],[KeyboardButton(text=BTN_BACK)]], resize_keyboard=True)
@@ -561,13 +596,37 @@ def rk_proxy() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 def rk_profile() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text=BTN_REF), KeyboardButton(text=BTN_TOPUP)],[KeyboardButton(text=BTN_BACK)]], resize_keyboard=True)
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text=BTN_TOPUP)],
+            [KeyboardButton(text=BTN_BACK)],
+        ],
+        resize_keyboard=True,
+    )
 
 def rk_topup() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="💵 100₽"), KeyboardButton(text="💵 300₽"), KeyboardButton(text="💵 500₽")],[KeyboardButton(text="✏️ Своя Сумма")],[KeyboardButton(text=BTN_BACK)]], resize_keyboard=True)
 
 def rk_payment_actions() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text=BTN_PAY_YM)],[KeyboardButton(text=BTN_PAY_BAL), KeyboardButton(text=BTN_PAY_STARS)],[KeyboardButton(text=BTN_CHECK)],[KeyboardButton(text=BTN_BACK)]], resize_keyboard=True)
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text=BTN_PAY_YM)],
+            [KeyboardButton(text=BTN_PAY_BAL), KeyboardButton(text=BTN_PAY_STARS)],
+            [KeyboardButton(text=BTN_CHECK)],
+            [KeyboardButton(text=BTN_BACK)],
+        ],
+        resize_keyboard=True,
+    )
+
+def rk_payment_actions_yoomoney_only() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text=BTN_PAY_YM)],
+            [KeyboardButton(text=BTN_CHECK)],
+            [KeyboardButton(text=BTN_BACK)],
+        ],
+        resize_keyboard=True,
+    )
 
 user_states: Dict[int, Dict[str, Optional[str]]] = {}
 admin_states: Dict[int, Dict[str, Optional[str]]] = {}
@@ -603,7 +662,7 @@ async def main_menu_text() -> str:
                 txt += f"- {d[1]}: <b>{d[2]:.0f}%</b>\n"
     return txt
 
-FREE_PREMIUM_TEXT = "💠 <b>Бесплатная Премка</b>\n\nПриглашайте друзей — пополняйте баланс. Активируйте промокоды — пополняйте баланс.\n\n<b>Как это работает</b>:\n• Пригласите друга по вашей ссылке — после подписки обоим начислим ₽\n• Активируйте промокоды — зачислим ₽ на баланс\n\nОплачивайте любые товары с баланса."
+FREE_PREMIUM_TEXT = "💠 <b>Бесплатная Премка</b>\n\n""🫂 Приглашайте друзей — пополняйте баланс.\n""🎁 Активируйте промокоды — пополняйте баланс.\n\n""📌 <b>Как это работает</b>:\n""• 👫 Пригласите друга по вашей ссылке — после подписки обоим начислим ₽\n""• 🔑 Активируйте промокоды — зачислим ₽ на баланс\n\n""💳 Оплачивайте любые товары с баланса."
 
 async def check_subscription_status(user_id: int) -> bool:
     if not CHANNEL_USERNAME or not CHANNEL_USERNAME.startswith("@"):
@@ -644,6 +703,8 @@ async def cmd_start(message: Message):
     async with DB_LOCK:
         await DB_CONN.execute("UPDATE profiles SET subscribed = ? WHERE user_id = ?", (1 if subscribed else 0, message.from_user.id))
         await DB_CONN.commit()
+    if subscribed:
+        await award_referral_if_needed(message.from_user.id, REFERRAL_BONUS_RUB)
     if not subscribed:
         await message.answer("🔔 <b>Подпишитесь на канал</b>, чтобы продолжить.\n\nПосле подписки заново выполните /start.", reply_markup=ReplyKeyboardRemove())
         return
@@ -656,6 +717,35 @@ async def cmd_start(message: Message):
             await message.answer(caption, reply_markup=rk_main())
     else:
         await message.answer(caption, reply_markup=rk_main())
+
+@dp.message(Command("profile"))
+async def cmd_profile(message: Message):
+    if await is_banned(message.from_user.id):
+        reason = await get_ban_reason(message.from_user.id)
+        await message.answer(f"⛔ Вы не можете использовать бота, так как забанены навсегда.\nПричина: {reason or 'не указана'}")
+        return
+    await open_profile(message)
+
+@dp.message(Command("referral"))
+async def cmd_referral(message: Message):
+    if await is_banned(message.from_user.id):
+        reason = await get_ban_reason(message.from_user.id)
+        await message.answer(f"⛔ Вы не можете использовать бота, так как забанены навсегда.\nПричина: {reason or 'не указана'}")
+        return
+    await open_referrals(message)
+
+@dp.message(Command("promocode"))
+async def cmd_promocode(message: Message):
+    if await is_banned(message.from_user.id):
+        reason = await get_ban_reason(message.from_user.id)
+        await message.answer(f"⛔ Вы не можете использовать бота, так как забанены навсегда.\nПричина: {reason or 'не указана'}")
+        return
+    set_user_state(message.from_user.id, "promo_wait")
+    await message.answer("🎫 Отправьте промокод одним сообщением.")
+
+@dp.message(Command("politics"))
+async def cmd_politics(message: Message):
+    await message.answer(PRIVACY_URL)
 
 @dp.message(Command("admin"))
 async def cmd_admin(message: Message):
@@ -679,7 +769,7 @@ async def cmd_admin(message: Message):
         [InlineKeyboardButton(text=f'💱 Коэфф.: {rate}', callback_data='admin_set_rate'), InlineKeyboardButton(text=f'⚙ Авто-коэфф.: {auto_label}', callback_data='admin_toggle_auto_rate')],
         [InlineKeyboardButton(text='👤 Назначить админа', callback_data='admin_add_admin'), InlineKeyboardButton(text='🚫 Снять админа', callback_data='admin_remove_admin')],
         [InlineKeyboardButton(text='📋 Список админов', callback_data='admin_list_admins')],
-        [InlineKeyboardButton(text='📤 Экспорт CSV', callback_data='admin_export'), InlineKeyboardButton(text='📊 Статистика', callback_data='admin_stats')],
+        [InlineKeyboardButton(text='📊 Статистика', callback_data='admin_stats')],
         [InlineKeyboardButton(text='🎫 Промокоды', callback_data='admin_promos'), InlineKeyboardButton(text='💳 Топапы', callback_data='admin_topups')]
     ])
     await message.answer('🛠️ <b>Админ-панель</b>', reply_markup=kb)
@@ -725,13 +815,6 @@ async def cb_admin_panel(callback: CallbackQuery):
         await set_setting("show_discount", "0" if cur else "1")
         state = "Включено" if not cur else "Выключено"
         await callback.message.edit_text(f"🔔 Отображение текущей скидки теперь: {state}")
-    elif data == 'admin_export':
-        path = await export_users_csv()
-        try:
-            await bot.send_document(MAIN_ADMIN_ID, InputFile(path), caption="📤 Экспорт пользователей (CSV)")
-        except Exception:
-            logger.exception("Failed to send export to admin")
-        await callback.answer("Экспорт отправлен.")
     elif data == 'admin_stats':
         async with DB_LOCK:
             cur = await DB_CONN.execute("SELECT COUNT(*) FROM users")
@@ -774,7 +857,15 @@ async def cb_admin_panel(callback: CallbackQuery):
             lines.append("Доп. админов нет.")
         await callback.message.edit_text("\n".join(lines))
     elif data == 'admin_promos':
-        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text='➕ Создать промокод', callback_data='promo_add')],[InlineKeyboardButton(text='➖ Удалить промокод', callback_data='promo_delete')],[InlineKeyboardButton(text='📋 Список промокодов', callback_data='promo_list')],[InlineKeyboardButton(text='🔙 Назад', callback_data='admin_back')]])
+        kb = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text='➕ Создать промокод', callback_data='promo_add')],
+                [InlineKeyboardButton(text='➖ Удалить промокод', callback_data='promo_delete')],
+                [InlineKeyboardButton(text='📋 Список промокодов', callback_data='promo_list')],
+                [InlineKeyboardButton(text='🗑 Удалить все промокоды', callback_data='promo_delete_all')],
+                [InlineKeyboardButton(text='🔙 Назад', callback_data='admin_back')],
+            ]
+        )
         await callback.message.edit_text("🎫 <b>Промокоды</b>", reply_markup=kb)
     elif data == 'admin_topups':
         rows = await get_unpaid_topups()
@@ -787,7 +878,7 @@ async def cb_admin_panel(callback: CallbackQuery):
         await callback.message.edit_text("\n".join(lines))
     await callback.answer()
 
-@dp.callback_query(lambda c: c.data in ["discount_add", "discount_remove", "discount_list", "ban_user", "unban_user", "promo_add", "promo_list", "promo_delete", "bal_money_add", "bal_money_sub", "bal_money_zero"])
+@dp.callback_query(lambda c: c.data in ["discount_add", "discount_remove", "discount_list", "ban_user", "unban_user", "promo_add", "promo_list", "promo_delete", "promo_delete_all", "bal_money_add", "bal_money_sub", "bal_money_zero"])
 async def cb_admin_submenus(callback: CallbackQuery):
     if not await is_admin(callback.from_user.id):
         await callback.answer("Доступ запрещён.", show_alert=True)
@@ -807,7 +898,8 @@ async def cb_admin_submenus(callback: CallbackQuery):
             lines = ["🎉 <b>Скидки</b>:\n"]
             for i, t, p in disc:
                 lines.append(f"{i}. {t} — <b>{p:.0f}%</b>")
-            await callback.message.edit_text("\n".join(lines))
+            kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")]])
+            await callback.message.edit_text("\n".join(lines), reply_markup=kb)
     elif data == "ban_user":
         set_admin_state(callback.from_user.id, "waiting_ban_user")
         await callback.message.edit_text("⛔ Введите: <b>user_id причина</b>")
@@ -830,7 +922,14 @@ async def cb_admin_submenus(callback: CallbackQuery):
             lines = ["🎫 <b>Промокоды</b>:\n"]
             for c, a, act in rows:
                 lines.append(f"<b>{c}</b> — <b>{a:.0f}₽</b> — осталось <b>{act}</b>")
-            await callback.message.edit_text("\n".join(lines))
+            kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")]])
+            await callback.message.edit_text("\n".join(lines), reply_markup=kb)
+    elif data == "promo_delete_all":
+        async with DB_LOCK:
+            await DB_CONN.execute("DELETE FROM promocodes")
+            await DB_CONN.execute("DELETE FROM promocode_uses")
+            await DB_CONN.commit()
+        await callback.message.edit_text("🗑 Все промокоды были удалены.")
     elif data == "bal_money_add":
         set_admin_state(callback.from_user.id, "waiting_bal_money_add")
         await callback.message.edit_text("➕ Введите: <b>user_id сумма [причина]</b>")
@@ -875,8 +974,22 @@ async def open_referrals(message: Message):
     uid = message.from_user.id
     me = await bot.me()
     link = f"https://t.me/{me.username}?start=ref{uid}"
-    text = "👥 <b>Реферальная программа</b>\n\n" f"🔗 Ваша ссылка:\n<code>{link}</code>\n\n" "Приглашайте друзей — начислим ₽ на баланс после подписки на канал."
-    await message.answer(text, reply_markup=rk_profile())
+    refs_done, earned_total = await get_referral_stats(uid)
+    text = (
+        "🫂 <b>Реферальная система</b>\n\n"
+        "🔗 Ваша личная ссылка:\n"
+        f"<code>{link}</code>\n\n"
+        f"👥 Приглашено друзей: <b>{refs_done}</b>\n"
+        f"💸 Заработано на рефералах: <b>{earned_total:.0f}₽</b>\n\n"
+        f"✨ За каждого друга, который подпишется на канал, вы и ваш друг получаете по "
+        f"<b>{REFERRAL_BONUS_RUB:.0f}₽</b> на баланс!"
+    )
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 Назад в главное меню", callback_data="referral_back_to_main")],
+        ]
+    )
+    await message.answer(text, reply_markup=kb)
 
 async def open_topup_menu(message: Message):
     set_user_state(message.from_user.id, "topup")
@@ -931,8 +1044,14 @@ async def create_stars_order(message: Message, stars: int):
     link = quickpay_link(receiver, amount_rub, order_id, "AC") if receiver else "(YooMoney отключён администратором)"
     await save_order(order_id, uid, "stars", "", 0, stars, price_rub=amount_rub, price_usd=0.0, price_stars=stars, method="yoomoney_stars", payment_ref=order_id)
     set_user_state(uid, "await_payment", tmp=order_id, extra={"pay_kind": "stars"})
-    gift_stars = await stars_needed_for_rub(amount_rub)
-    await message.answer(f"🧾 <b>Заказ</b> <code>{order_id}</code>\n\nПокупка: <b>{stars}⭐</b>\nСтоимость: <b>{amount_rub}₽</b>\n\n🔗 YooMoney:\n{link}\n\n⭐ Или подарите ровно <b>{gift_stars}⭐</b> (или немного больше) профилю <b>@{STARS_GIFT_USERNAME}</b>\nи укажите в комментарии номер заказа:\n<code>{order_id}</code>", reply_markup=rk_payment_actions())
+    await message.answer(
+        f"🧾 <b>Заказ</b> <code>{order_id}</code>\n\n"
+        f"Покупка: <b>{stars}⭐</b>\n"
+        f"💳 Стоимость: <b>{amount_rub:.2f}₽</b>\n\n"
+        f"🔗 <b>Оплата только через YooMoney</b>:\n{link}\n\n"
+        "После оплаты нажмите кнопку «🔎 Проверить Оплату».",
+        reply_markup=rk_payment_actions_yoomoney_only(),
+    )
 
 async def create_empty_order(message: Message):
     uid = message.from_user.id
@@ -964,12 +1083,6 @@ async def text_router(message: Message):
         await message.answer(f"⛔ Вы не можете использовать бота, так как забанены навсегда.\nПричина: {ban_reason or 'не указана'}")
         return
     txt = (message.text or "").strip()
-    if txt.lower().startswith("/admin"):
-        await cmd_admin(message)
-        return
-    if txt.lower().startswith("/start"):
-        await cmd_start(message)
-        return
     if await is_admin(uid):
         ast = get_admin_state(uid)["state"]
         if ast:
@@ -1195,6 +1308,12 @@ async def text_router(message: Message):
     if txt == BTN_PROFILE:
         await open_profile(message)
         return
+    if txt == BTN_TOPUP:
+        await open_topup_menu(message)
+        return
+    if txt == BTN_REF_SYSTEM:
+        await open_referrals(message)
+        return
     if txt == BTN_PROMO:
         set_user_state(uid, "promo_wait")
         await message.answer("🎫 Отправьте промокод одним сообщением.")
@@ -1246,7 +1365,13 @@ async def text_router(message: Message):
         if not code:
             await message.reply("Отправьте текстом сам код.")
             return
-        amount = await use_promocode(code, uid)
+        try:
+            amount = await use_promocode(code, uid)
+        except Exception as e:
+            logger.exception("use_promocode failed: %s", e)
+            await message.answer("⚠️ Произошла ошибка при обработке промокода. Попробуйте позже или обратитесь в поддержку.", reply_markup=rk_main())
+            clear_user_state(uid)
+            return
         if amount:
             await message.answer(f"✅ Промокод активирован. Начислено <b>{amount:.0f}₽</b> на баланс.", reply_markup=rk_profile())
         else:
@@ -1291,7 +1416,9 @@ async def text_router(message: Message):
             await create_proxy_order(message, country)
             return
     if st == "await_payment":
-        last_order = get_user_state(uid).get("tmp")
+        st_data = get_user_state(uid)
+        last_order = st_data.get("tmp")
+        pay_kind = st_data.get("pay_kind")
         if not last_order:
             await message.reply("Нет активного заказа.", reply_markup=rk_main())
             clear_user_state(uid)
@@ -1305,9 +1432,17 @@ async def text_router(message: Message):
             amount_rub = float(o[6] or 0.0)
             receiver = YOOMONEY_RECEIVER or ""
             link = quickpay_link(receiver, amount_rub, o[0], "AC") if receiver else "(YooMoney отключён администратором)"
-            await message.answer(f"🔗 Ссылка на оплату YooMoney:\n{link}", reply_markup=rk_payment_actions())
+            kb = rk_payment_actions_yoomoney_only() if pay_kind == "stars" else rk_payment_actions()
+            await message.answer(f"🔗 Ссылка на оплату YooMoney:\n{link}", reply_markup=kb)
             return
         if txt == BTN_PAY_STARS:
+            if pay_kind == "stars":
+                await message.reply(
+                    "❗ Для покупки звёзд оплата доступна только через YooMoney.\n\n"
+                    "Пожалуйста, используйте кнопку «🔗 Оплатить YooMoney».",
+                    reply_markup=rk_payment_actions_yoomoney_only(),
+                )
+                return
             o = await get_order(last_order)
             if not o:
                 await message.reply("Заказ не найден.", reply_markup=rk_main())
@@ -1318,6 +1453,12 @@ async def text_router(message: Message):
             await message.answer("⭐ <b>Оплата Звёздами</b>\n\n" f"Подарите ровно <b>{need}⭐</b> (или немного больше) профилю <b>@{STARS_GIFT_USERNAME}</b>\n" f"и укажите в комментарии номер заказа:\n<code>{o[0]}</code>\n\n" "После отправки нажмите «Проверить Оплату».", reply_markup=rk_payment_actions())
             return
         if txt == BTN_PAY_BAL:
+            if pay_kind == "stars":
+                await message.reply(
+                    "❗ Для покупки звёзд нельзя платить с баланса.\n\nИспользуйте кнопку «🔗 Оплатить YooMoney».",
+                    reply_markup=rk_payment_actions_yoomoney_only(),
+                )
+                return
             o = await get_order(last_order)
             if not o:
                 await message.reply("Заказ не найден.", reply_markup=rk_main())
@@ -1397,4 +1538,4 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
-        pass
+        pass 
