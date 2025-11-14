@@ -60,6 +60,9 @@ ignored_phrases: List[str] = ['🩻 вы не подписаны на на ос�
 recent_message_texts: Dict[str, float] = {}
 DUPLICATE_WINDOW = 5 * 60
 ALWAYS_ONLINE = True
+ONLINE_PING_MIN_INTERVAL = 120
+ONLINE_PING_MAX_INTERVAL = 240
+
 
 class AdaptiveRateLimiter:
 
@@ -497,18 +500,27 @@ async def keep_presence_loop():
             if ALWAYS_ONLINE:
                 try:
                     await client(functions.account.UpdateStatusRequest(offline=False))
-                    log('[PRESENCE] set online (periodic).')
+                    try:
+                        msg = await client.send_message('me', 'ping')
+                        await client.delete_messages('me', msg.id)
+                    except Exception as e:
+                        log(f'[PRESENCE] self-ping failed: {type(e).__name__}: {e}')
+                    log('[PRESENCE] forced online (status + self-ping).')
                 except Exception as e:
                     log(f'[PRESENCE] periodic online update failed: {type(e).__name__}: {e}')
+                delay = random.uniform(ONLINE_PING_MIN_INTERVAL, ONLINE_PING_MAX_INTERVAL)
             else:
                 try:
                     await client(functions.account.UpdateStatusRequest(offline=True))
                     log('[PRESENCE] set offline (periodic).')
                 except Exception as e:
                     log(f'[PRESENCE] periodic offline update failed: {type(e).__name__}: {e}')
+                delay = 60
         except Exception as e:
             log(f'[PRESENCE] loop err: {e}')
-        await asyncio.sleep(60 * 5)
+            delay = 60
+        await asyncio.sleep(delay)
+
 
 async def cooldown_monitor_loop():
     global global_cooldown_until, cooldown_active_flag
@@ -827,20 +839,29 @@ async def handle_bot_update(upd: Dict[str, Any]):
                 await bot_send_message(chat_id, 'Monitored:\n' + '\n'.join(lines))
             return
         if lower.startswith('/presence '):
-            parts = text.split()
-            if len(parts) >= 2:
-                arg = parts[1].lower()
-                if arg in ('on', '1', 'true'):
-                    ALWAYS_ONLINE = True
-                    await bot_send_message(chat_id, 'Presence: ALWAYS_ONLINE enabled (will keep account online).')
-                elif arg in ('off', '0', 'false'):
-                    ALWAYS_ONLINE = False
-                    await bot_send_message(chat_id, 'Presence: ALWAYS_ONLINE disabled (will set account offline periodically).')
-                else:
-                    await bot_send_message(chat_id, 'Usage: /presence on|off')
-            else:
-                await bot_send_message(chat_id, 'Usage: /presence on|off')
-            return
+    parts = text.split()
+    if len(parts) >= 2:
+        arg = parts[1].lower()
+        if arg in ('on', '1', 'true'):
+            ALWAYS_ONLINE = True
+            try:
+                await client(functions.account.UpdateStatusRequest(offline=False))
+            except Exception as e:
+                log(f'[PRESENCE] /presence on failed: {type(e).__name__}: {e}')
+            await bot_send_message(chat_id, 'Presence: ALWAYS_ONLINE enabled (will keep account online).')
+        elif arg in ('off', '0', 'false'):
+            ALWAYS_ONLINE = False
+            try:
+                await client(functions.account.UpdateStatusRequest(offline=True))
+            except Exception as e:
+                log(f'[PRESENCE] /presence off failed: {type(e).__name__}: {e}')
+            await bot_send_message(chat_id, 'Presence: ALWAYS_ONLINE disabled (will set account offline periodically).')
+        else:
+            await bot_send_message(chat_id, 'Usage: /presence on|off')
+    else:
+        await bot_send_message(chat_id, 'Usage: /presence on|off')
+    return
+
         await bot_send_message(chat_id, 'Unknown command. Use /help.')
     except Exception as e:
         log(f'[BOT HANDLER ERR] {type(e).__name__}: {e}')
