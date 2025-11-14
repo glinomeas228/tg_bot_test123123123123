@@ -712,7 +712,17 @@ async def main_menu_text() -> str:
                 txt += f"- {d[1]}: <b>{d[2]:.0f}%</b>\n"
     return txt
 
-FREE_PREMIUM_TEXT = ("💠 <b>Бесплатная Премка</b>\n\n""🫂 Приглашайте друзей — копите ₽ на балансе.\n""🎁 Активируйте промокоды — получайте бонусы.\n\n""📌 <b>Как это работает</b>:\n""• 👫 Пригласите друга по вашей ссылке — после подписки обоим начислим ₽\n""• 💎 За накопленные ₽ можно взять <b>любой товар</b> в магазине <b>бесплатно</b>\n""• 🔑 Применяйте промокоды — мгновенное пополнение\n\n""🎯 Делитесь ссылкой и забирайте премки без трат!")
+FREE_PREMIUM_TEXT = (
+    "💠 <b>Бесплатная Премка</b>\n\n"
+    "🫂 Приглашайте друзей — копите ₽ на балансе.\n"
+    "🎁 Активируйте промокоды — получайте бонусы.\n\n"
+    "📌 <b>Как это работает</b>:\n"
+    "• 👫 Пригласите друга по вашей ссылке — после подписки обоим начислим ₽\n"
+    "• 💎 За накопленные ₽ можно взять <b>любой товар</b> в магазине <b>бесплатно</b>\n"
+    "• 🔑 Применяйте промокоды — мгновенное пополнение\n\n"
+    "🎯 Делитесь ссылкой и забирайте премки без трат!"
+)
+
 
 
 
@@ -1069,7 +1079,8 @@ async def build_premium_order(message: Message, months: int):
     await save_order(order_id, uid, "premium", str(months), months, 0, price_rub=amount_rub, price_usd=0.0, price_stars=0, method="yoomoney", payment_ref=order_id)
     set_user_state(uid, "await_payment", tmp=order_id, extra={"pay_kind": "premium", "months": months})
     gift_stars = await stars_needed_for_rub(amount_rub)
-    await message.answer(f"📦 <b>Telegram Premium — {months} мес.</b>\n\n💳 Цена: <b>{amount_rub:.2f}₽</b>\n{f'\n{disc_info}\n' if disc_info else ''}\n🔗 YooMoney:\n{link}\n\n⭐ Или подарите ровно <b>{gift_stars}⭐</b> (или немного больше) профилю <b>@{STARS_GIFT_USERNAME}</b>\nи укажите в комментарии номер заказа:\n<code>{order_id}</code>\n\nМожно также оплатить с баланса.", reply_markup=rk_payment_actions())
+    disc_block = (f"\n{disc_info}\n" if disc_info else "")
+    await message.answer(f"📦 <b>Telegram Premium — {months} мес.</b>\n\n💳 Цена: <b>{amount_rub:.2f}₽</b>\n{disc_block}\n🔗 YooMoney:\n{link}\n\n⭐ Или подарите ровно <b>{gift_stars}⭐</b> (или немного больше) профилю <b>@{STARS_GIFT_USERNAME}</b>\nи укажите в комментарии номер заказа:\n<code>{order_id}</code>\n\nМожно также оплатить с баланса.", reply_markup=rk_payment_actions())
 
 async def start_stars_flow(message: Message):
     set_user_state(message.from_user.id, "stars_menu")
@@ -1096,7 +1107,7 @@ async def create_stars_order(message: Message, stars: int):
     await message.answer(
         f"🧾 <b>Заказ</b> <code>{order_id}</code>\n\n"
         f"Покупка: <b>{stars}⭐</b>\n"
-        f"💳 Стоимость: <b>{amount_rub:.2f}₽</b>\n\n{f'{disc_info}\n\n' if disc_info else ''}"
+        f"💳 Стоимость: <b>{amount_rub:.2f}₽</b>\n\n{disc_block}"
         f"🔗 <b>Оплата только через YooMoney</b>:\n{link}\n\n"
         "После оплаты нажмите кнопку «🔎 Проверить Оплату».",
         reply_markup=rk_payment_actions_yoomoney_only(),
@@ -1112,7 +1123,8 @@ async def create_empty_order(message: Message):
     await save_order(order_id, uid, "empty", "", 0, 1, price_rub=price, method="yoomoney_empty", payment_ref=order_id)
     set_user_state(uid, "await_payment", tmp=order_id, extra={"pay_kind": "empty"})
     gift_stars = await stars_needed_for_rub(price)
-    await message.answer("🆕 <b>Пустой Телеграм-аккаунт</b>\n\n🌍 Регион: США\n" f"💳 Цена: <b>{price:.0f}₽</b>\n\n{f'{disc_info}\n\n' if disc_info else ''}{f'{disc_info}\n\n' if disc_info else ''}" f"🔗 YooMoney:\n{link}\n\n" f"⭐ Или подарите ровно <b>{gift_stars}⭐</b> (или немного больше) профилю <b>@{STARS_GIFT_USERNAME}</b>\nи укажите в комментарии номер заказа:\n<code>{order_id}</code>", reply_markup=rk_payment_actions())
+    disc_block = (f"\n{disc_info}\n" if disc_info else "")
+    await message.answer("🆕 <b>Пустой Телеграм-аккаунт</b>\n\n🌍 Регион: США\n" f"💳 Цена: <b>{price:.0f}₽</b>\n\n{disc_block}{disc_block}" f"🔗 YooMoney:\n{link}\n\n" f"⭐ Или подарите ровно <b>{gift_stars}⭐</b> (или немного больше) профилю <b>@{STARS_GIFT_USERNAME}</b>\nи укажите в комментарии номер заказа:\n<code>{order_id}</code>", reply_markup=rk_payment_actions())
 
 async def create_proxy_order(message: Message, country: str):
     uid = message.from_user.id
@@ -1124,7 +1136,8 @@ async def create_proxy_order(message: Message, country: str):
     await save_order(order_id, uid, "proxy", country, 0, 1, price_rub=price, method="yoomoney_proxy", payment_ref=order_id)
     set_user_state(uid, "await_payment", tmp=order_id, extra={"pay_kind": "proxy", "country": country})
     gift_stars = await stars_needed_for_rub(price)
-    await message.answer(f"🛰 <b>Proxy/VPN</b>\n\nСтрана: <b>{country}</b>\nТехнология: <b>{PROXY_TECH_DESCRIPTION}</b>\nЦена: <b>{price:.0f}₽</b>\n\n{f'{disc_info}\n\n' if disc_info else ''}🔗 YooMoney:\n{link}\n\n⭐ Или подарите ровно <b>{gift_stars}⭐</b> (или немного больше) профилю <b>@{STARS_GIFT_USERNAME}</b>\nи укажите в комментарии номер заказа:\n<code>{order_id}</code>", reply_markup=rk_payment_actions())
+    disc_block = (f"\n{disc_info}\n" if disc_info else "")
+    await message.answer(f"🛰 <b>Proxy/VPN</b>\n\nСтрана: <b>{country}</b>\nТехнология: <b>{PROXY_TECH_DESCRIPTION}</b>\nЦена: <b>{price:.0f}₽</b>\n\n{disc_block}🔗 YooMoney:\n{link}\n\n⭐ Или подарите ровно <b>{gift_stars}⭐</b> (или немного больше) профилю <b>@{STARS_GIFT_USERNAME}</b>\nи укажите в комментарии номер заказа:\n<code>{order_id}</code>", reply_markup=rk_payment_actions())
 
 @dp.message(F.text)
 async def text_router(message: Message):
