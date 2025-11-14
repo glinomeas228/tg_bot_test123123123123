@@ -871,15 +871,12 @@ async def bot_poll_loop():
 
 async def main():
     global client, me, bot_http_session, react_semaphore, limiter, CONCURRENCY, TARGET_RATE, ALWAYS_ONLINE
-    print('Выберите эмодзи для реакции:')
-    print('  1 — лайк (👍)   2 — дизлайк (👎)   3 — клоун (🤡)')
-    print('  4 — сердце (❤️) 5 — стрела в сердце (💘) 6 — улыбка (😁)')
-    choice = input('Введите 1/2/3/4/5/6 или слово (like/dislike/clown/heart/smile): ').strip().lower()
+    choice = "1"
     emoji = EMOJI_MAP.get(choice, EMOJI_MAP.get(choice.lower(), '🤡'))
     if not emoji and choice:
         emoji = EMOJI_MAP.get(choice.lower(), '🤡')
     log(f'Выбрано: {emoji}')
-    raw = input('Введите ссылки/юзеры/ID чатов через пробел (https://t.me/username @username username -1002659107326 123456789):\n').strip()
+    raw = "https://t.me/love_thxs_ideas"
     if not raw:
         log('Чаты не указаны — автореакт не будет запущен.')
         tokens = []
