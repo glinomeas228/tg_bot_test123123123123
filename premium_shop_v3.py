@@ -563,6 +563,9 @@ async def use_promocode(code: str, user_id: int) -> Optional[float]:
     code = (code or "").strip().upper()
     if not code:
         return None
+
+    amount: Optional[float] = None
+
     async with DB_LOCK:
         cur = await DB_CONN.execute(
             "SELECT amount, activations FROM promocodes WHERE code = ? LIMIT 1",
@@ -574,22 +577,29 @@ async def use_promocode(code: str, user_id: int) -> Optional[float]:
         amount, activations = float(row[0]), int(row[1])
         if activations <= 0:
             return None
+
         cur = await DB_CONN.execute(
             "SELECT 1 FROM promocode_uses WHERE code = ? AND user_id = ? LIMIT 1",
             (code, user_id),
         )
         if await cur.fetchone():
             return None
+
         await DB_CONN.execute(
-            "INSERT INTO promocode_uses(code, user_id) VALUES(?,?)", (code, user_id)
+            "INSERT INTO promocode_uses(code, user_id) VALUES(?,?)",
+            (code, user_id),
         )
         await DB_CONN.execute(
             "UPDATE promocodes SET activations = activations - 1 WHERE code = ?",
             (code,),
         )
         await DB_CONN.commit()
+
+    if amount is not None:
         await add_real_balance(user_id, amount)
         return amount
+
+    return None
 
 
 async def create_discount(title: str, percent: float):
