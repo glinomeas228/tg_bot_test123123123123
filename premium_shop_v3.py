@@ -67,8 +67,6 @@ async def init_db():
     await DB_CONN.execute("CREATE TABLE IF NOT EXISTS orders(order_id TEXT PRIMARY KEY, user_id INTEGER NOT NULL, item_type TEXT NOT NULL, item_id TEXT, months INTEGER DEFAULT 0, qty INTEGER DEFAULT 0, price_rub REAL DEFAULT 0, price_usd REAL DEFAULT 0, price_stars INTEGER DEFAULT 0, method TEXT, payment_ref TEXT, paid INTEGER DEFAULT 0, created_at TEXT DEFAULT CURRENT_TIMESTAMP)")
     await DB_CONN.execute("CREATE TABLE IF NOT EXISTS topups(order_id TEXT PRIMARY KEY, user_id INTEGER NOT NULL, amount_rub REAL NOT NULL, payment_ref TEXT, paid INTEGER DEFAULT 0, created_at TEXT DEFAULT CURRENT_TIMESTAMP)")
     await DB_CONN.execute("CREATE TABLE IF NOT EXISTS discounts(id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, percent REAL)")
-    
-    await DB_CONN.execute("CREATE TABLE IF NOT EXISTS item_discounts(item_key TEXT PRIMARY KEY, mode TEXT CHECK(mode IN ('percent','fixed')) NOT NULL, value REAL NOT NULL)")
     await DB_CONN.commit()
     await migrate_db()
     async with DB_LOCK:
@@ -403,54 +401,6 @@ async def delete_discount(id_or_title: str) -> bool:
         return cur.rowcount > 0
 
 async def list_discounts() -> List[Tuple[int, str, float]]:
-    async with DB_LOCK:
-        cur = await DB_CONN.execute("SELECT id, title, percent FROM discounts ORDER BY id DESC")
-        return await cur.fetchall()
-
-
-async def set_item_discount(item_key: str, mode: str, value: float):
-    if mode not in ("percent", "fixed"):
-        raise ValueError("mode must be 'percent' or 'fixed'")
-    async with DB_LOCK:
-        await DB_CONN.execute("INSERT OR REPLACE INTO item_discounts(item_key, mode, value) VALUES(?,?,?)", (item_key, mode, float(value)))
-        await DB_CONN.commit()
-
-async def delete_item_discount(item_key: str) -> bool:
-    async with DB_LOCK:
-        cur = await DB_CONN.execute("DELETE FROM item_discounts WHERE item_key = ?", (item_key,))
-        await DB_CONN.commit()
-        return cur.rowcount > 0
-
-async def get_item_discount(item_key: str):
-    async with DB_LOCK:
-        cur = await DB_CONN.execute("SELECT mode, value FROM item_discounts WHERE item_key = ? LIMIT 1", (item_key,))
-        row = await cur.fetchone()
-    return (row[0], float(row[1])) if row else None
-
-async def list_item_discounts():
-    async with DB_LOCK:
-        cur = await DB_CONN.execute("SELECT item_key, mode, value FROM item_discounts ORDER BY item_key")
-        return await cur.fetchall()
-
-async def apply_item_discount_to_price(item_key: str, base_rub: float):
-    disc = await get_item_discount(item_key)
-    if not disc:
-        return float(base_rub), None
-    mode, val = disc
-    if mode == "percent":
-        new_price = max(0.0, base_rub * (1.0 - float(val) / 100.0))
-        disc_text = f"🔥 Скидка <b>{val:.0f}%</b>"
-    else:
-        new_price = max(0.0, base_rub - float(val))
-        disc_text = f"🔥 Скидка <b>{val:.0f}₽</b>"
-    show = (await get_setting("show_discount", "1")) == "1"
-    if show:
-        info = f"{disc_text} — <s>{base_rub:.2f}₽</s> → <b>{new_price:.2f}₽</b>"
-    else:
-        info = None
-    return float(new_price), info
-
-
     try:
         async with DB_LOCK:
             cur = await DB_CONN.execute("SELECT id, title, percent FROM discounts ORDER BY id DESC")
@@ -470,6 +420,26 @@ async def set_setting(key: str, value: str):
     async with DB_LOCK:
         await DB_CONN.execute("INSERT OR REPLACE INTO settings(key, value) VALUES(?,?)", (key, value))
         await DB_CONN.commit()
+
+DISCOUNT_ITEM_KEYS = {
+    "premium": "Telegram Premium",
+    "stars": "Покупка Звёзд",
+    "empty": "Пустой аккаунт",
+    "proxy": "Proxy/VPN",
+}
+
+async def get_item_discount(item_key: str) -> Tuple[str, float]:
+    mode = await get_setting(f"discount_{item_key}_mode", "none")
+    value_str = await get_setting(f"discount_{item_key}_value", "0")
+    try:
+        value = float(value_str or 0.0)
+    except Exception:
+        value = 0.0
+    return mode, value
+
+async def set_item_discount(item_key: str, mode: str, value: float):
+    await set_setting(f"discount_{item_key}_mode", mode)
+    await set_setting(f"discount_{item_key}_value", str(float(value)))
 
 async def save_order(order_id: str, user_id: int, item_type: str, item_id: str = "", months: int = 0, qty: int = 0, price_rub: float = 0.0, price_usd: float = 0.0, price_stars: int = 0, method: str = "", payment_ref: Optional[str] = None):
     async with DB_LOCK:
@@ -624,13 +594,13 @@ def rk_main() -> ReplyKeyboardMarkup:
     )
 
 def rk_telegram() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text=BTN_PREMIUM)],[KeyboardButton(text=BTN_STARS)],[KeyboardButton(text=BTN_EMPTY)],[KeyboardButton(text=BTN_BACK)]], resize_keyboard=True)
+    return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text=BTN_PREMIUM)], [KeyboardButton(text=BTN_STARS)], [KeyboardButton(text=BTN_EMPTY)], [KeyboardButton(text=BTN_BACK)]], resize_keyboard=True)
 
 def rk_premium_periods() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="🗓 1 Месяц"), KeyboardButton(text="📆 12 Месяцев")],[KeyboardButton(text=BTN_BACK)]], resize_keyboard=True)
+    return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="🗓 1 Месяц"), KeyboardButton(text="📆 12 Месяцев")], [KeyboardButton(text=BTN_BACK)]], resize_keyboard=True)
 
 def rk_stars_menu() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="⭐ 300"), KeyboardButton(text="⭐ 600"), KeyboardButton(text="⭐ 1200")],[KeyboardButton(text="✏️ Свой Объём")],[KeyboardButton(text=BTN_BACK)]], resize_keyboard=True)
+    return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="⭐ 300"), KeyboardButton(text="⭐ 600"), KeyboardButton(text="⭐ 1200")], [KeyboardButton(text="✏️ Свой Объём")], [KeyboardButton(text=BTN_BACK)]], resize_keyboard=True)
 
 def rk_proxy() -> ReplyKeyboardMarkup:
     rows = []
@@ -655,7 +625,7 @@ def rk_profile() -> ReplyKeyboardMarkup:
     )
 
 def rk_topup() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="💵 100₽"), KeyboardButton(text="💵 300₽"), KeyboardButton(text="💵 500₽")],[KeyboardButton(text="✏️ Своя Сумма")],[KeyboardButton(text=BTN_BACK)]], resize_keyboard=True)
+    return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="💵 100₽"), KeyboardButton(text="💵 300₽"), KeyboardButton(text="💵 500₽")], [KeyboardButton(text="✏️ Своя Сумма")], [KeyboardButton(text=BTN_BACK)]], resize_keyboard=True)
 
 def rk_payment_actions() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
@@ -705,26 +675,29 @@ async def main_menu_text() -> str:
     txt = "🌟 <b>Главное Меню</b>\n\nВыберите категорию ниже."
     show = (await get_setting("show_discount", "1")) == "1"
     if show:
-        disc = await list_discounts()
-        if disc:
-            txt += "\n\n🎉 <b>Акции</b>:\n"
-            for d in disc[:3]:
-                txt += f"- {d[1]}: <b>{d[2]:.0f}%</b>\n"
+        lines: List[str] = []
+        for key in ("premium", "stars", "empty", "proxy"):
+            mode, value = await get_item_discount(key)
+            if mode in ("percent", "fixed") and value > 0:
+                name = DISCOUNT_ITEM_KEYS.get(key, key)
+                if mode == "percent":
+                    val_txt = f"{value:.0f}%"
+                else:
+                    val_txt = f"{value:.0f}₽"
+                lines.append(f"- {name}: <b>{val_txt}</b>")
+        if lines:
+            txt += "\n\n🎉 <b>Акции</b>:\n" + "\n".join(lines)
     return txt
 
 FREE_PREMIUM_TEXT = (
     "💠 <b>Бесплатная Премка</b>\n\n"
-    "🫂 Приглашайте друзей — копите ₽ на балансе.\n"
-    "🎁 Активируйте промокоды — получайте бонусы.\n\n"
+    "🫂 Приглашай друзей по своей реферальной ссылке и получай рубли на баланс.\n"
+    "💖 Копи баланс и бери ⭐ звёзды, премиум, аккаунты и прокси вообще без вложений.\n\n"
     "📌 <b>Как это работает</b>:\n"
-    "• 👫 Пригласите друга по вашей ссылке — после подписки обоим начислим ₽\n"
-    "• 💎 За накопленные ₽ можно взять <b>любой товар</b> в магазине <b>бесплатно</b>\n"
-    "• 🔑 Применяйте промокоды — мгновенное пополнение\n\n"
-    "🎯 Делитесь ссылкой и забирайте премки без трат!"
+    "• 👫 За каждого друга, который подпишется на канал, вы оба получаете бонус на баланс.\n"
+    "• 🎁 Активируй промокоды — тоже получай рубли на счёт.\n\n"
+    "💳 Всё, что есть в магазине, можно оплатить с баланса — то есть получить бесплатно."
 )
-
-
-
 
 async def check_subscription_status(user_id: int) -> bool:
     if not CHANNEL_USERNAME or not CHANNEL_USERNAME.startswith("@"):
@@ -864,19 +837,21 @@ async def cb_admin_panel(callback: CallbackQuery):
         set_admin_state(callback.from_user.id, "waiting_mark_paid")
         await callback.message.edit_text("🟢 Отправьте order_id, чтобы пометить как оплачен:")
     elif data == 'admin_discounts':
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-    [InlineKeyboardButton(text='💎 Premium 1 мес.', callback_data='disc_item_premium_1'), InlineKeyboardButton(text='💎 Premium 12 мес.', callback_data='disc_item_premium_12')],
-    [InlineKeyboardButton(text='⭐ Звёзды', callback_data='disc_item_stars')],
-    [InlineKeyboardButton(text='🆕 Пустой Аккаунт', callback_data='disc_item_empty'), InlineKeyboardButton(text='🛰 Proxy/VPN', callback_data='disc_item_proxy')],
-    [InlineKeyboardButton(text='📋 Список скидок', callback_data='discount_list')],
-    [InlineKeyboardButton(text='🔙 Назад', callback_data='admin_back')],
-])
-        await callback.message.edit_text("📊 <b>Управление скидками</b>", reply_markup=kb)
+        kb = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text='💎 Telegram Premium', callback_data='disc_item_premium')],
+                [InlineKeyboardButton(text='⭐ Звёзды', callback_data='disc_item_stars')],
+                [InlineKeyboardButton(text='🆕 Пустой аккаунт', callback_data='disc_item_empty')],
+                [InlineKeyboardButton(text='🛰 Proxy/VPN', callback_data='disc_item_proxy')],
+                [InlineKeyboardButton(text='🔙 Назад', callback_data='admin_back')],
+            ]
+        )
+        await callback.message.edit_text("📊 <b>Управление скидками</b>\n\nВыберите товар, для которого хотите настроить скидку.", reply_markup=kb)
     elif data == 'admin_ban':
-        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text='⛔ Заблокировать', callback_data='ban_user')],[InlineKeyboardButton(text='🔓 Разблокировать', callback_data='unban_user')],[InlineKeyboardButton(text='🔙 Назад', callback_data='admin_back')]])
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text='⛔ Заблокировать', callback_data='ban_user')], [InlineKeyboardButton(text='🔓 Разблокировать', callback_data='unban_user')], [InlineKeyboardButton(text='🔙 Назад', callback_data='admin_back')]])
         await callback.message.edit_text("🚫 Бан / Разбан:", reply_markup=kb)
     elif data == 'admin_balances':
-        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text='➕ Выдать Баланс', callback_data='bal_money_add'), InlineKeyboardButton(text='➖ Забрать Баланс', callback_data='bal_money_sub')],[InlineKeyboardButton(text='🧹 Обнулить Баланс', callback_data='bal_money_zero')],[InlineKeyboardButton(text='🔙 Назад', callback_data='admin_back')]])
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text='➕ Выдать Баланс', callback_data='bal_money_add'), InlineKeyboardButton(text='➖ Забрать Баланс', callback_data='bal_money_sub')], [InlineKeyboardButton(text='🧹 Обнулить Баланс', callback_data='bal_money_zero')], [InlineKeyboardButton(text='🔙 Назад', callback_data='admin_back')]])
         await callback.message.edit_text("💼 <b>Операции с балансом</b>", reply_markup=kb)
     elif data == 'admin_toggle_discount_display':
         cur = (await get_setting("show_discount", "1")) == "1"
@@ -934,6 +909,76 @@ async def cb_admin_panel(callback: CallbackQuery):
                 [InlineKeyboardButton(text='🔙 Назад', callback_data='admin_back')],
             ]
         )
+        await callback.message.edit_text("🎫 <b>Промокоды</b>", reply_markup=kb)
+    elif data == 'admin_topups':
+        rows = await get_unpaid_topups()
+        if not rows:
+            await callback.message.edit_text("Нет ожидающих пополнений.")
+            return
+        lines = ["💳 <b>Ожидающие пополнения</b>:\n"]
+        for oid, uid, amount in rows[:120]:
+            lines.append(f"{oid} — {amount:.2f}₽ — user:{uid}")
+        await callback.message.edit_text("\n".join(lines))
+    await callback.answer()
+
+@dp.callback_query(lambda c: c.data and c.data.startswith("disc_"))
+async def cb_discounts_items(callback: CallbackQuery):
+    if not await is_admin(callback.from_user.id):
+        await callback.answer("Доступ запрещён.", show_alert=True)
+        return
+    data = callback.data
+    if data.startswith("disc_item_"):
+        key = data.replace("disc_item_", "", 1)
+        mode, value = await get_item_discount(key)
+        name = DISCOUNT_ITEM_KEYS.get(key, key)
+        if mode == "percent":
+            cur = f"{value:.0f}%"
+        elif mode == "fixed":
+            cur = f"{value:.0f}₽"
+        else:
+            cur = "нет"
+        text = (
+            f"📊 <b>Скидка для товара:</b> {name}\n\n"
+            f"Текущая скидка: <b>{cur}</b>\n\n"
+            "Выберите, как хотите задать скидку:"
+        )
+        kb = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="📉 Скидка в %", callback_data=f"disc_set_percent_{key}")],
+                [InlineKeyboardButton(text="💵 Скидка в ₽", callback_data=f"disc_set_fixed_{key}")],
+                [InlineKeyboardButton(text="🗑 Убрать скидку", callback_data=f"disc_clear_{key}")],
+                [InlineKeyboardButton(text="🔙 Назад", callback_data="admin_discounts")],
+            ]
+        )
+        await callback.message.edit_text(text, reply_markup=kb)
+        await callback.answer()
+        return
+    if data.startswith("disc_set_percent_"):
+        key = data.replace("disc_set_percent_", "", 1)
+        set_admin_state(callback.from_user.id, "waiting_discount_value", tmp=f"percent|{key}")
+        name = DISCOUNT_ITEM_KEYS.get(key, key)
+        await callback.message.edit_text(
+            f"✏️ Введите размер скидки в процентах для <b>{name}</b>.\n\nНапример: <code>10</code> (это будет 10%)."
+        )
+        await callback.answer()
+        return
+    if data.startswith("disc_set_fixed_"):
+        key = data.replace("disc_set_fixed_", "", 1)
+        set_admin_state(callback.from_user.id, "waiting_discount_value", tmp=f"fixed|{key}")
+        name = DISCOUNT_ITEM_KEYS.get(key, key)
+        await callback.message.edit_text(
+            f"✏️ Введите размер скидки в рублях для <b>{name}</b>.\n\nНапример: <code>50</code> (скидка 50₽)."
+        )
+        await callback.answer()
+        return
+    if data.startswith("disc_clear_"):
+        key = data.replace("disc_clear_", "", 1)
+        await set_item_discount(key, "none", 0.0)
+        name = DISCOUNT_ITEM_KEYS.get(key, key)
+        await callback.message.edit_text(f"🧹 Скидка для товара <b>{name}</b> отключена.")
+        await callback.answer()
+        return
+    await callback.answer()
 
 @dp.callback_query(lambda c: c.data in ["discount_add", "discount_remove", "discount_list", "ban_user", "unban_user", "promo_add", "promo_list", "promo_delete", "promo_delete_all", "bal_money_add", "bal_money_sub", "bal_money_zero"])
 async def cb_admin_submenus(callback: CallbackQuery):
@@ -997,6 +1042,11 @@ async def cb_admin_submenus(callback: CallbackQuery):
         set_admin_state(callback.from_user.id, "waiting_bal_money_zero")
         await callback.message.edit_text("🧹 Введите: <b>user_id [причина]</b>")
     await callback.answer()
+
+@dp.callback_query(lambda c: c.data == "referral_back_to_main")
+async def cb_referral_back_to_main(callback: CallbackQuery):
+    await callback.answer()
+    await open_main(callback.message)
 
 async def open_main(message: Message):
     set_user_state(message.from_user.id, "main")
@@ -1071,7 +1121,6 @@ async def open_premium_periods(message: Message):
 
 async def build_premium_order(message: Message, months: int):
     amount_rub = await premium_price_rub(months)
-    amount_rub, disc_info = await apply_item_discount_to_price(f"premium_{months}", amount_rub)
     uid = message.from_user.id
     order_id = str(uuid.uuid4())
     receiver = YOOMONEY_RECEIVER or ""
@@ -1079,8 +1128,7 @@ async def build_premium_order(message: Message, months: int):
     await save_order(order_id, uid, "premium", str(months), months, 0, price_rub=amount_rub, price_usd=0.0, price_stars=0, method="yoomoney", payment_ref=order_id)
     set_user_state(uid, "await_payment", tmp=order_id, extra={"pay_kind": "premium", "months": months})
     gift_stars = await stars_needed_for_rub(amount_rub)
-    disc_block = (f"\n{disc_info}\n" if disc_info else "")
-    await message.answer(f"📦 <b>Telegram Premium — {months} мес.</b>\n\n💳 Цена: <b>{amount_rub:.2f}₽</b>\n{disc_block}\n🔗 YooMoney:\n{link}\n\n⭐ Или подарите ровно <b>{gift_stars}⭐</b> (или немного больше) профилю <b>@{STARS_GIFT_USERNAME}</b>\nи укажите в комментарии номер заказа:\n<code>{order_id}</code>\n\nМожно также оплатить с баланса.", reply_markup=rk_payment_actions())
+    await message.answer(f"📦 <b>Telegram Premium — {months} мес.</b>\n\n💳 Цена: <b>{amount_rub:.2f}₽</b>\n\n🔗 YooMoney:\n{link}\n\n⭐ Или подарите ровно <b>{gift_stars}⭐</b> (или немного больше) профилю <b>@{STARS_GIFT_USERNAME}</b>\nи укажите в комментарии номер заказа:\n<code>{order_id}</code>\n\nМожно также оплатить с баланса.", reply_markup=rk_payment_actions())
 
 async def start_stars_flow(message: Message):
     set_user_state(message.from_user.id, "stars_menu")
@@ -1098,7 +1146,6 @@ async def create_stars_order(message: Message, stars: int):
     rate = await get_exchange_rate_value()
     usd = stars / STARS_PER_USD
     amount_rub = math.ceil(usd * rate * 100) / 100.0
-    amount_rub, disc_info = await apply_item_discount_to_price('stars', amount_rub)
     order_id = str(uuid.uuid4())
     receiver = YOOMONEY_RECEIVER or ""
     link = quickpay_link(receiver, amount_rub, order_id, "AC") if receiver else "(YooMoney отключён администратором)"
@@ -1107,7 +1154,7 @@ async def create_stars_order(message: Message, stars: int):
     await message.answer(
         f"🧾 <b>Заказ</b> <code>{order_id}</code>\n\n"
         f"Покупка: <b>{stars}⭐</b>\n"
-        f"💳 Стоимость: <b>{amount_rub:.2f}₽</b>\n\n{disc_block}"
+        f"💳 Стоимость: <b>{amount_rub:.2f}₽</b>\n\n"
         f"🔗 <b>Оплата только через YooMoney</b>:\n{link}\n\n"
         "После оплаты нажмите кнопку «🔎 Проверить Оплату».",
         reply_markup=rk_payment_actions_yoomoney_only(),
@@ -1116,28 +1163,24 @@ async def create_stars_order(message: Message, stars: int):
 async def create_empty_order(message: Message):
     uid = message.from_user.id
     price = EMPTY_ACCOUNT_PRICE_RUB
-    price, disc_info = await apply_item_discount_to_price('empty', price)
     order_id = str(uuid.uuid4())
     receiver = YOOMONEY_RECEIVER or ""
     link = quickpay_link(receiver, price, order_id, "AC") if receiver else "(YooMoney отключён администратором)"
     await save_order(order_id, uid, "empty", "", 0, 1, price_rub=price, method="yoomoney_empty", payment_ref=order_id)
     set_user_state(uid, "await_payment", tmp=order_id, extra={"pay_kind": "empty"})
     gift_stars = await stars_needed_for_rub(price)
-    disc_block = (f"\n{disc_info}\n" if disc_info else "")
-    await message.answer("🆕 <b>Пустой Телеграм-аккаунт</b>\n\n🌍 Регион: США\n" f"💳 Цена: <b>{price:.0f}₽</b>\n\n{disc_block}{disc_block}" f"🔗 YooMoney:\n{link}\n\n" f"⭐ Или подарите ровно <b>{gift_stars}⭐</b> (или немного больше) профилю <b>@{STARS_GIFT_USERNAME}</b>\nи укажите в комментарии номер заказа:\n<code>{order_id}</code>", reply_markup=rk_payment_actions())
+    await message.answer("🆕 <b>Пустой Телеграм-аккаунт</b>\n\n🌍 Регион: США\n" f"💳 Цена: <b>{price:.0f}₽</b>\n\n" f"🔗 YooMoney:\n{link}\n\n" f"⭐ Или подарите ровно <b>{gift_stars}⭐</b> (или немного больше) профилю <b>@{STARS_GIFT_USERNAME}</b>\nи укажите в комментарии номер заказа:\n<code>{order_id}</code>", reply_markup=rk_payment_actions())
 
 async def create_proxy_order(message: Message, country: str):
     uid = message.from_user.id
     price = PROXY_PRICE_RUB
-    price, disc_info = await apply_item_discount_to_price('proxy', price)
     order_id = str(uuid.uuid4())
     receiver = YOOMONEY_RECEIVER or ""
     link = quickpay_link(receiver, price, order_id, "AC") if receiver else "(YooMoney отключён администратором)"
     await save_order(order_id, uid, "proxy", country, 0, 1, price_rub=price, method="yoomoney_proxy", payment_ref=order_id)
     set_user_state(uid, "await_payment", tmp=order_id, extra={"pay_kind": "proxy", "country": country})
     gift_stars = await stars_needed_for_rub(price)
-    disc_block = (f"\n{disc_info}\n" if disc_info else "")
-    await message.answer(f"🛰 <b>Proxy/VPN</b>\n\nСтрана: <b>{country}</b>\nТехнология: <b>{PROXY_TECH_DESCRIPTION}</b>\nЦена: <b>{price:.0f}₽</b>\n\n{disc_block}🔗 YooMoney:\n{link}\n\n⭐ Или подарите ровно <b>{gift_stars}⭐</b> (или немного больше) профилю <b>@{STARS_GIFT_USERNAME}</b>\nи укажите в комментарии номер заказа:\n<code>{order_id}</code>", reply_markup=rk_payment_actions())
+    await message.answer(f"🛰 <b>Proxy/VPN</b>\n\nСтрана: <b>{country}</b>\nТехнология: <b>{PROXY_TECH_DESCRIPTION}</b>\nЦена: <b>{price:.0f}₽</b>\n\n🔗 YooMoney:\n{link}\n\n⭐ Или подарите ровно <b>{gift_stars}⭐</b> (или немного больше) профилю <b>@{STARS_GIFT_USERNAME}</b>\nи укажите в комментарии номер заказа:\n<code>{order_id}</code>", reply_markup=rk_payment_actions())
 
 @dp.message(F.text)
 async def text_router(message: Message):
@@ -1316,6 +1359,30 @@ async def text_router(message: Message):
             if ast == "waiting_discount_remove":
                 ok = await delete_discount(txt.strip())
                 await message.reply("✅ Удалено." if ok else "Не найдено.")
+                clear_admin_state(uid)
+                return
+            if ast == "waiting_discount_value":
+                tmp_state = get_admin_state(uid).get("tmp") or ""
+                try:
+                    mode, item_key = tmp_state.split("|", 1)
+                except Exception:
+                    clear_admin_state(uid)
+                    await message.reply("⚠️ Ошибка состояния. Откройте управление скидками заново.")
+                    return
+                try:
+                    val = float(txt.replace(",", "."))
+                except Exception:
+                    await message.reply("Введите число, например 10 или 99.9")
+                    return
+                name = DISCOUNT_ITEM_KEYS.get(item_key, item_key)
+                if val <= 0:
+                    await set_item_discount(item_key, "none", 0.0)
+                    await message.reply(f"🧹 Скидка для товара <b>{name}</b> отключена.")
+                else:
+                    mode_norm = "percent" if mode == "percent" else "fixed"
+                    await set_item_discount(item_key, mode_norm, val)
+                    unit = "%" if mode_norm == "percent" else "₽"
+                    await message.reply(f"✅ Скидка для <b>{name}</b> установлена: <b>{val:.0f}{unit}</b>.")
                 clear_admin_state(uid)
                 return
             if ast == "waiting_bal_money_add":
@@ -1497,7 +1564,11 @@ async def text_router(message: Message):
             receiver = YOOMONEY_RECEIVER or ""
             link = quickpay_link(receiver, amount_rub, o[0], "AC") if receiver else "(YooMoney отключён администратором)"
             kb = rk_payment_actions_yoomoney_only() if pay_kind == "stars" else rk_payment_actions()
-            await message.answer(f"🔗 Ссылка на оплату YooMoney:\n{link}", reply_markup=kb)
+            await message.answer(
+                "🔗 Ссылка на оплату YooMoney:\n"
+                f"<a href=\"{link}\">💳 Перейти к оплате</a>",
+                reply_markup=kb,
+            )
             return
         if txt == BTN_PAY_STARS:
             if pay_kind == "stars":
@@ -1562,7 +1633,8 @@ async def text_router(message: Message):
                 clear_user_state(uid)
                 return
             else:
-                await message.reply("Платёж не найден.\n\nПопробуйте позже или свяжитесь с поддержкой.", reply_markup=rk_payment_actions())
+                kb = rk_payment_actions_yoomoney_only() if pay_kind == "stars" else rk_payment_actions()
+                await message.reply("Платёж не найден.\n\nПопробуйте позже или свяжитесь с поддержкой.", reply_markup=kb)
                 return
     if txt == BTN_PRIVACY:
         await message.answer(PRIVACY_URL)
@@ -1602,62 +1674,4 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
-        pass 
-
-
-
-@dp.callback_query(lambda c: c.data and (c.data.startswith('disc_item_') or c.data.startswith('disc_set_p_') or c.data.startswith('disc_set_f_') or c.data.startswith('disc_del_') or c.data == 'discount_list'))
-async def cb_discounts_new(callback: CallbackQuery):
-    if not await is_admin(callback.from_user.id):
-        await callback.answer("Доступ запрещён.", show_alert=True)
-        return
-    data = callback.data
-    if data == 'discount_list':
-        rows = await list_item_discounts()
-        if not rows:
-            await callback.message.edit_text("Скидок нет.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад", callback_data="admin_discounts")]]))
-            return
-        lines = ["🎉 <b>Скидки по товарам</b>:\n"]
-        name_map = {'premium_1': 'Premium 1 мес.', 'premium_12': 'Premium 12 мес.', 'stars': 'Звёзды', 'empty': 'Пустой Аккаунт', 'proxy': 'Proxy/VPN'}
-        for item_key, mode, value in rows:
-            nm = name_map.get(item_key, item_key)
-            unit = '%' if mode == 'percent' else '₽'
-            lines.append(f"- {nm}: <b>{value:.0f}{unit}</b>")
-        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад", callback_data="admin_discounts")]])
-        await callback.message.edit_text("\n".join(lines), reply_markup=kb)
-        return
-    if data.startswith('disc_item_'):
-        key = data.replace('disc_item_', '', 1)
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text='📉 Скидка в %', callback_data=f'disc_set_p_{key}'),
-             InlineKeyboardButton(text='💵 Скидка в ₽', callback_data=f'disc_set_f_{key}')],
-            [InlineKeyboardButton(text='🗑 Удалить скидку', callback_data=f'disc_del_{key}')],
-            [InlineKeyboardButton(text='🔙 Назад', callback_data='admin_discounts')],
-        ])
-        nm = {'premium_1': 'Premium 1 мес.', 'premium_12': 'Premium 12 мес.', 'stars': 'Звёзды', 'empty': 'Пустой Аккаунт', 'proxy': 'Proxy/VPN'}.get(key, key)
-        await callback.message.edit_text(f"Выбран товар: <b>{nm}</b>\nВыберите действие:", reply_markup=kb)
-        return
-    if data.startswith('disc_set_p_'):
-        key = data.replace('disc_set_p_', '', 1)
-        set_admin_state(callback.from_user.id, 'waiting_disc_percent', tmp=key)
-        await callback.message.edit_text("✏️ Введите значение скидки в <b>%</b> (целое число или с точкой):")
-        return
-    if data.startswith('disc_set_f_'):
-        key = data.replace('disc_set_f_', '', 1)
-        set_admin_state(callback.from_user.id, 'waiting_disc_fixed', tmp=key)
-        await callback.message.edit_text("✏️ Введите значение скидки в <b>рублях</b> (целое число или с точкой):")
-        return
-    if data.startswith('disc_del_'):
-        key = data.replace('disc_del_', '', 1)
-        ok = await delete_item_discount(key)
-        msg = "✅ Скидка удалена." if ok else "Скидка не найдена."
-        await callback.message.edit_text(msg, reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад", callback_data="admin_discounts")]]))
-        return
-    await callback.answer()
-
-
-
-@dp.callback_query(F.data == 'referral_back_to_main')
-async def cb_referral_back_to_main(callback: CallbackQuery):
-    await callback.answer()
-    await open_main(callback.message)
+        pass
