@@ -892,12 +892,12 @@ async def bot_poll_loop():
 
 async def main():
     global client, me, bot_http_session, react_semaphore, limiter, CONCURRENCY, TARGET_RATE, ALWAYS_ONLINE
-    choice = "1"
+    choice = "3"
     emoji = EMOJI_MAP.get(choice, EMOJI_MAP.get(choice.lower(), '🤡'))
     if not emoji and choice:
         emoji = EMOJI_MAP.get(choice.lower(), '🤡')
     log(f'Выбрано: {emoji}')
-    raw = "https://t.me/love_thxs_ideas"
+    raw = "https://t.me/love_thxs_chat"
     if not raw:
         log('Чаты не указаны — автореакт не будет запущен.')
         tokens = []
